@@ -1,5 +1,10 @@
-# C++ objects and libs
+*.user
+*-debug/
+*-release/
+*-dbi-release/
+*-default/
 
+# C++ objects and libs
 *.slo
 *.lo
 *.o
