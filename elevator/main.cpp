@@ -10,6 +10,10 @@
 #include <csignal>
 #include <string>
 #include <iostream>
+#include <mutex>
+#include <condition_variable>
+#include <thread>
+#include <deque>
 
 #define MIN_FLOORS_COUNT    5
 #define MAX_FLOORS_COUNT    20
@@ -25,6 +29,42 @@ namespace {
     int floor_count;
     int floor_timeout;
     int door_timeout;
+
+    // Event queue
+    enum EventType {
+        Quit
+    };
+    struct Event {
+        EventType event_;
+        int param1_;
+        int param2_;
+    };
+    std::deque<Event> equeue;
+    std::mutex eqmutex;
+    std::condition_variable eqcond;
+
+    void send_event(const Event& ev)
+    {
+        eqmutex.lock();
+        equeue.push_front(ev);
+        eqmutex.unlock();
+        eqcond.notify_one();
+    }
+
+    void elevator_thread_proc()
+    {
+        while (true) {
+            std::unique_lock<std::mutex> lock(eqmutex);
+            eqcond.wait(lock, [](){ return !equeue.empty();});
+            Event ev = equeue.back();
+            equeue.pop_back();
+            lock.unlock();
+
+            if (Quit == ev.event_) {
+                break;
+            }
+        }
+    }
 
     void sighandler(int)
     {
@@ -127,6 +167,8 @@ int main(int argc, char *argv[])
     sigaction(SIGINT, &action, nullptr);
 #endif
 
+    std::thread elevator_thread(elevator_thread_proc);
+
     while (true) {
         printf("CMD>");
         fflush(stdout);
@@ -137,5 +179,7 @@ int main(int argc, char *argv[])
         }
     }
 
+    send_event(Event{Quit});
+    elevator_thread.join();
     return 0;
 }
