@@ -14,6 +14,7 @@
 #include <condition_variable>
 #include <thread>
 #include <deque>
+#include <chrono>
 
 #define MIN_FLOORS_COUNT    5
 #define MAX_FLOORS_COUNT    20
@@ -32,7 +33,9 @@ namespace {
 
     // Event queue
     enum EventType {
-        Quit
+        Quit,
+        Timer,
+        PostTimer
     };
     struct Event {
         EventType event_;
@@ -43,27 +46,53 @@ namespace {
     std::mutex eqmutex;
     std::condition_variable eqcond;
 
+    void elevator_thread_proc()
+    {
+#define delayed_event(to,e) \
+    { \
+        next_time = system_clock::now() + milliseconds(to); \
+        next_event = e; \
+    }
+        using namespace std::chrono;
+        system_clock::time_point next_time = system_clock::time_point::max();
+        Event next_event;
+        while (true) {
+            Event ev;
+            std::unique_lock<std::mutex> lock(eqmutex);
+            bool timed_out = false;
+            if (system_clock::time_point::max() == next_time) {
+                eqcond.wait(lock, [](){ return !equeue.empty();});
+            } else {
+                timed_out = !eqcond.wait_until(lock, next_time, [](){ return !equeue.empty();});
+            }
+            if (timed_out) {
+                next_time = system_clock::time_point::max();
+                ev = next_event;
+            } else {
+                ev = equeue.back();
+                equeue.pop_back();
+            }
+            lock.unlock();
+
+            if (Quit == ev.event_) {
+                break;
+            }
+            if (Timer == ev.event_) {
+                printf("%s: Timer received!\n", __func__);
+                delayed_event(1000, Event{PostTimer});
+            } else if (PostTimer == ev.event_) {
+                printf("%s: PostTimer received!\n", __func__);
+            }
+        }
+#undef delayed_event
+    }
+
     void send_event(const Event& ev)
     {
         eqmutex.lock();
         equeue.push_front(ev);
         eqmutex.unlock();
         eqcond.notify_one();
-    }
-
-    void elevator_thread_proc()
-    {
-        while (true) {
-            std::unique_lock<std::mutex> lock(eqmutex);
-            eqcond.wait(lock, [](){ return !equeue.empty();});
-            Event ev = equeue.back();
-            equeue.pop_back();
-            lock.unlock();
-
-            if (Quit == ev.event_) {
-                break;
-            }
-        }
     }
 
     void sighandler(int)
@@ -173,9 +202,13 @@ int main(int argc, char *argv[])
         printf("CMD>");
         fflush(stdout);
         std::string command;
-        getline(std::cin, command);
-        if (term_sig_received) {
+        if ((0 != (std::getline(std::cin, command).rdstate()
+                   & (std::ios_base::badbit | std::ios_base::eofbit | std::ios_base::failbit)))
+            || term_sig_received) {
             break;
+        }
+        if ("t" == command) {
+            send_event(Event{Timer});
         }
     }
 
