@@ -110,19 +110,31 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    signal(SIGINT, sighandler);
-
     printf("Starting elevator with following parameters:\n"
            "  Floors count      : %d\n"
            "  Intrefloor timeout: %d ms\n"
            "  Door close timeout: %d ms\n",
            floor_count, floor_timeout, door_timeout);
 
-    while (!term_sig_received) {
+#ifdef _WIN32
+    signal(SIGINT, sighandler);
+#else
+    struct sigaction action;
+    memset(&action, 0, sizeof(struct sigaction));
+    action.sa_handler = sighandler;
+    sigemptyset(&action.sa_mask);
+    sigaddset(&action.sa_mask, SIGINT);
+    sigaction(SIGINT, &action, nullptr);
+#endif
+
+    while (true) {
         printf("CMD>");
         fflush(stdout);
         std::string command;
         getline(std::cin, command);
+        if (term_sig_received) {
+            break;
+        }
     }
 
     return 0;
