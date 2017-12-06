@@ -1,8 +1,15 @@
+#ifdef _MSC_VER
+#define _CRT_SECURE_NO_WARNINGS
+#endif
+
 #include <cstdio>
 #include <cstdlib>
 #include <clocale>
 #include <cstring>
 #include <cinttypes>
+#include <csignal>
+#include <string>
+#include <iostream>
 
 #define MIN_FLOORS_COUNT    5
 #define MAX_FLOORS_COUNT    20
@@ -14,9 +21,16 @@
 #define MAX_DOOR_OPEN_TIME  120.0
 
 namespace {
+    bool term_sig_received = false;
     int floor_count;
     int floor_timeout;
     int door_timeout;
+
+    void sighandler(int)
+    {
+        printf("\nStop signal was catched. Stopping.\n");
+        term_sig_received = true;
+    }
 
     bool parse_command_line(int argc, char *argv[])
     {
@@ -96,11 +110,20 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    signal(SIGINT, sighandler);
+
     printf("Starting elevator with following parameters:\n"
            "  Floors count      : %d\n"
            "  Intrefloor timeout: %d ms\n"
            "  Door close timeout: %d ms\n",
            floor_count, floor_timeout, door_timeout);
+
+    while (!term_sig_received) {
+        printf("CMD>");
+        fflush(stdout);
+        std::string command;
+        getline(std::cin, command);
+    }
 
     return 0;
 }
