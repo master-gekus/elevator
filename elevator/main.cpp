@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstdarg>
 #include <clocale>
 #include <cstring>
 #include <cinttypes>
@@ -46,6 +47,21 @@ namespace {
     std::mutex eqmutex;
     std::condition_variable eqcond;
 
+    void
+#ifdef __GNUC__
+    __attribute__ ((format (printf, 1, 2)))
+#endif
+    lprintf(const char* format, ...)
+    {
+        static std::mutex out_mutex;
+        va_list list;
+        va_start(list, format);
+        out_mutex.lock();
+        vprintf(format, list);
+        out_mutex.unlock();
+        va_end(list);
+    }
+
     void elevator_thread_proc()
     {
 #define delayed_event(to,e) \
@@ -78,10 +94,10 @@ namespace {
                 break;
             }
             if (Timer == ev.event_) {
-                printf("%s: Timer received!\n", __func__);
+                lprintf("%s: Timer received!\n", __func__);
                 delayed_event(1000, Event{PostTimer});
             } else if (PostTimer == ev.event_) {
-                printf("%s: PostTimer received!\n", __func__);
+                lprintf("%s: PostTimer received!\n", __func__);
             }
         }
 #undef delayed_event
@@ -95,9 +111,31 @@ namespace {
         eqcond.notify_one();
     }
 
+    bool process_command(const char* cmd)
+    {
+        while (isspace(*cmd)) {
+            ++cmd;
+        }
+        if ('\0' == (*cmd)) {
+            return true;
+        }
+        switch (toupper(*cmd)) {
+        case 'Q':
+            lprintf("Stopping elevator...\n");
+            return false;
+        case 'T':
+            send_event(Event{Timer});
+            return true;
+        default:
+            break;
+        }
+        lprintf("Unrecognized command \"%c\". Type \"?\" for list of avaible commands.\n", *cmd);
+        return true;
+    }
+
     void sighandler(int)
     {
-        printf("\nStop signal was catched. Stopping.\n");
+        lprintf("\nStop signal was catched. Stopping.\n");
         term_sig_received = true;
     }
 
@@ -138,7 +176,7 @@ namespace {
         return true;
     }
 
-    void display_help(const char *argv)
+    void display_command_line_help(const char *argv)
     {
         const char *name = strrchr(argv,
 #ifdef _WIN32
@@ -175,14 +213,15 @@ int main(int argc, char *argv[])
     setlocale(LC_ALL, "C");
 
     if (!parse_command_line(argc, argv)) {
-        display_help(argv[0]);
+        display_command_line_help(argv[0]);
         return 1;
     }
 
     printf("Starting elevator with following parameters:\n"
            "  Floors count      : %d\n"
            "  Intrefloor timeout: %d ms\n"
-           "  Door close timeout: %d ms\n",
+           "  Door close timeout: %d ms\n"
+           "Type a command or \"?\" to list of avaible commands.\n",
            floor_count, floor_timeout, door_timeout);
 
 #ifdef _WIN32
@@ -199,20 +238,16 @@ int main(int argc, char *argv[])
     std::thread elevator_thread(elevator_thread_proc);
 
     while (true) {
-        printf("CMD>");
-        fflush(stdout);
         std::string command;
         if ((0 != (std::getline(std::cin, command).rdstate()
                    & (std::ios_base::badbit | std::ios_base::eofbit | std::ios_base::failbit)))
-            || term_sig_received) {
+            || term_sig_received || (!process_command(command.c_str()))) {
             break;
-        }
-        if ("t" == command) {
-            send_event(Event{Timer});
         }
     }
 
     send_event(Event{Quit});
     elevator_thread.join();
+    printf("Elevator stopped, have a nice day!\n");
     return 0;
 }
