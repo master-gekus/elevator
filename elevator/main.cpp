@@ -18,6 +18,7 @@
 #include <thread>
 #include <deque>
 #include <chrono>
+#include <cassert>
 
 #define MIN_FLOORS_COUNT    5
 #define MAX_FLOORS_COUNT    20
@@ -33,15 +34,53 @@ namespace {
     int floor_count;
     int floor_timeout;
     int door_timeout;
+    enum {MovingUp, MovingDown, StandBy} elevator_state = StandBy;
+    enum {DoorOpen, DoorsClosed} doors_state = DoorsClosed;
+    int current_floor = 1;
     struct
     {
         uint8_t up;
         uint8_t down;
         uint8_t internal;
+        inline bool is_any() const
+        {
+            return (0 != up) || (0 != down) || (0 != internal);
+        }
+        inline bool need_stop(bool has_up_calls, bool has_down_calls) const
+        {
+            if ((!has_up_calls) && (!has_down_calls)) {
+                return true;
+            }
+            if (0 != internal) {
+                return true;
+            }
+            if (MovingUp == elevator_state) {
+                if ((0 != up) || ((!has_up_calls) && (0 != down))) {
+                    return true;
+                }
+            }
+            if (MovingDown == elevator_state) {
+                if ((0 != down) || ((!has_down_calls) && (0 != up))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        inline void drop_all()
+        {
+            up = down = internal = 0;
+        }
+        inline void drop_by_direction()
+        {
+            internal = 0;
+            if (MovingUp == elevator_state) {
+                up = 0;
+            }
+            if (MovingDown == elevator_state) {
+                down = 0;
+            }
+        }
     } buttons_state[MAX_FLOORS_COUNT];
-    enum {MovingUp, MovingDown, StandBy} elevator_state = StandBy;
-    enum {DoorOpen, DoorsClosed} doors_state = DoorsClosed;
-    int current_floor = 1;
 
     void
 #ifdef __GNUC__
@@ -80,6 +119,7 @@ namespace {
         DownCallEvent,
         InternalButtonEvent,
         DoorsClosedEvent,
+        FloorReachedEvent,
     };
     struct Event {
         EventType event_;
@@ -107,6 +147,28 @@ namespace {
         delayed_event(door_timeout, Event{DoorsClosedEvent});
     }
 
+    void start_moving(bool log_start)
+    {
+        if (StandBy == elevator_state) {
+            return;
+        }
+        if (log_start) {
+            elog("Start moving from floor %u", current_floor);
+        }
+        delayed_event(floor_timeout, Event{FloorReachedEvent});
+    }
+
+    void start_moving_to_floor(int floor)
+    {
+        if (StandBy == elevator_state) {
+            elevator_state = (floor < current_floor) ? MovingDown : MovingUp;
+            if (DoorsClosed != doors_state) {
+                return;
+            }
+        }
+        start_moving(true);
+    }
+
     void process_button(uint8_t& btn_state, int floor)
     {
         btn_state = 1;
@@ -117,6 +179,64 @@ namespace {
             btn_state = 0;
             open_doors();
         } else {
+            start_moving_to_floor(floor);
+        }
+    }
+
+    void process_doors_closed()
+    {
+        elog("Doors was closed on floor %d", current_floor);
+        doors_state = DoorsClosed;
+        start_moving(true);
+    }
+
+    void process_floor_reached()
+    {
+        if (MovingUp == elevator_state) {
+            current_floor++;
+        } else {
+            assert(MovingDown == elevator_state);
+            current_floor--;
+        }
+        assert((current_floor > 0) && (current_floor <= floor_count));
+
+        bool has_up_calls = false;
+        for (int i = current_floor; i < floor_count; i++) {
+            if (buttons_state[i].is_any()) {
+                has_up_calls = true;
+                break;
+            }
+        }
+
+        bool has_down_calls = false;
+        for (int i = current_floor - 2; i >= 0; i--) {
+            if (buttons_state[i].is_any()) {
+                has_down_calls = true;
+                break;
+            }
+        }
+
+        if (buttons_state[current_floor - 1].need_stop(has_up_calls, has_down_calls)) {
+            elog("Elevator reached floor %u", current_floor);
+            if ((!has_up_calls) && (!has_down_calls)) {
+                assert(buttons_state[current_floor - 1].is_any());
+                buttons_state[current_floor - 1].drop_all();
+                elevator_state = StandBy;
+            } else {
+                if ((MovingUp == elevator_state) && (!has_up_calls)) {
+                    elevator_state = MovingDown;
+                    buttons_state[current_floor - 1].drop_all();
+                } else if ((MovingDown == elevator_state) && (!has_down_calls)) {
+                    elevator_state = MovingUp;
+                    buttons_state[current_floor - 1].drop_all();
+                } else {
+                    buttons_state[current_floor - 1].drop_by_direction();
+                }
+            }
+            open_doors();
+        } else {
+            elog("Elevator passes through floor %u", current_floor);
+            start_moving(false);
         }
     }
 
@@ -146,22 +266,19 @@ namespace {
             }
             switch (ev.event_) {
             case UpCallEvent:
-                elog("Upward call from floor %u accepted.", ev.param_);
                 process_button(buttons_state[ev.param_ - 1].up, ev.param_);
                 break;
             case DownCallEvent:
-                elog("Downward call from floor %u accepted.", ev.param_);
                 process_button(buttons_state[ev.param_ - 1].down, ev.param_);
                 break;
             case InternalButtonEvent:
-                elog("Internal button for floor %u accepted.", ev.param_);
                 process_button(buttons_state[ev.param_ - 1].internal, ev.param_);
                 break;
             case DoorsClosedEvent:
-                elog("Doors was closed on floor %d", current_floor);
-                doors_state = DoorsClosed;
-                if (StandBy == elevator_state) {
-                }
+                process_doors_closed();
+                break;
+            case FloorReachedEvent:
+                process_floor_reached();
                 break;
             default:
                 break;
@@ -197,8 +314,13 @@ namespace {
             "                  %s\n"
             "Calls upward:     %s\n"
             "Calls downward:   %s\n"
-            "Interanl buttons: %s\n",
-            st_header, st_up, st_down, st_int
+            "Interanl buttons: %s\n"
+            "Elevator %s floor %u%s.\n",
+            st_header, st_up, st_down, st_int,
+            ((DoorOpen == doors_state) || (StandBy == elevator_state)) ? "stays on" :
+            (MovingUp == elevator_state) ? "moves up from" : "moves down from",
+            current_floor,
+            (DoorOpen == doors_state) ? "; doors are open" : ""
         );
     }
 
