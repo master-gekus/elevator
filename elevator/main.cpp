@@ -33,13 +33,15 @@ namespace {
     int floor_count;
     int floor_timeout;
     int door_timeout;
-    struct one_floor_buttons
+    struct
     {
-        unsigned int up : 1;
-        unsigned int down : 1;
-        unsigned int internal : 1;
-    };
-    one_floor_buttons buttons_state[MAX_FLOORS_COUNT];
+        uint8_t up;
+        uint8_t down;
+        uint8_t internal;
+    } buttons_state[MAX_FLOORS_COUNT];
+    enum {MovingUp, MovingDown, StandBy} elevator_state = StandBy;
+    enum {DoorOpen, DoorsClosed} doors_state = DoorsClosed;
+    int current_floor = 1;
 
     void
 #ifdef __GNUC__
@@ -73,10 +75,11 @@ namespace {
 
     // Event queue
     enum EventType {
-        Quit,
-        UpCall,
-        DownCall,
-        InternalButton
+        QuitEvent,
+        UpCallEvent,
+        DownCallEvent,
+        InternalButtonEvent,
+        DoorsClosedEvent,
     };
     struct Event {
         EventType event_;
@@ -85,17 +88,41 @@ namespace {
     std::deque<Event> equeue;
     std::mutex eqmutex;
     std::condition_variable eqcond;
+    std::chrono::system_clock::time_point next_time = std::chrono::system_clock::time_point::max();
+    Event next_event{QuitEvent};
+
+    void delayed_event(unsigned int time_out, const Event& event)
+    {
+        next_time = std::chrono::system_clock::now() + std::chrono::milliseconds(time_out);
+        next_event = event;
+    }
+
+    void open_doors()
+    {
+        if (DoorOpen == doors_state) {
+            return;
+        }
+        elog("Open doors on floor %u", current_floor);
+        doors_state = DoorOpen;
+        delayed_event(door_timeout, Event{DoorsClosedEvent});
+    }
+
+    void process_button(uint8_t& btn_state, int floor)
+    {
+        btn_state = 1;
+        if (StandBy != elevator_state) {
+            return;
+        }
+        if (current_floor == floor) {
+            btn_state = 0;
+            open_doors();
+        } else {
+        }
+    }
 
     void elevator_thread_proc()
     {
-#define delayed_event(to,e) \
-    { \
-        next_time = system_clock::now() + milliseconds(to); \
-        next_event = e; \
-    }
         using namespace std::chrono;
-        system_clock::time_point next_time = system_clock::time_point::max();
-        Event next_event{Quit};
         while (true) {
             Event ev;
             std::unique_lock<std::mutex> lock(eqmutex);
@@ -114,27 +141,32 @@ namespace {
             }
             lock.unlock();
 
-            if (Quit == ev.event_) {
+            if (QuitEvent == ev.event_) {
                 break;
             }
             switch (ev.event_) {
-            case UpCall:
+            case UpCallEvent:
                 elog("Upward call from floor %u accepted.", ev.param_);
-                buttons_state[ev.param_ - 1].up = 1;
+                process_button(buttons_state[ev.param_ - 1].up, ev.param_);
                 break;
-            case DownCall:
+            case DownCallEvent:
                 elog("Downward call from floor %u accepted.", ev.param_);
-                buttons_state[ev.param_ - 1].down = 1;
+                process_button(buttons_state[ev.param_ - 1].down, ev.param_);
                 break;
-            case InternalButton:
+            case InternalButtonEvent:
                 elog("Internal button for floor %u accepted.", ev.param_);
-                buttons_state[ev.param_ - 1].internal = 1;
+                process_button(buttons_state[ev.param_ - 1].internal, ev.param_);
+                break;
+            case DoorsClosedEvent:
+                elog("Doors was closed on floor %d", current_floor);
+                doors_state = DoorsClosed;
+                if (StandBy == elevator_state) {
+                }
                 break;
             default:
                 break;
             }
         }
-#undef delayed_event
     }
 
     void send_event(const Event& ev)
@@ -199,13 +231,21 @@ namespace {
         case 'U':
             number = get_floor_number(cmd + 1);
             if (0 != number) {
-                send_event(Event{UpCall, number});
+                if (floor_count == number) {
+                    lprintf("No \"Up\" button on last floor.\n");
+                } else {
+                    send_event(Event{UpCallEvent, number});
+                }
             }
             return true;
         case 'D':
             number = get_floor_number(cmd + 1);
             if (0 != number) {
-                send_event(Event{DownCall, number});
+                if (1 == number) {
+                    lprintf("No \"Down\" button on first floor.\n");
+                } else {
+                    send_event(Event{DownCallEvent, number});
+                }
             }
             return true;
         default:
@@ -215,7 +255,7 @@ namespace {
         if (isdigit(*cmd)) {
             number = get_floor_number(cmd);
             if (0 != number) {
-                send_event(Event{InternalButton, number});
+                send_event(Event{InternalButtonEvent, number});
             }
             return true;
         }
@@ -338,7 +378,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    send_event(Event{Quit});
+    send_event(Event{QuitEvent});
     elevator_thread.join();
     printf("Elevator stopped, have a nice day!\n");
     return 0;
