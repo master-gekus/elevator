@@ -334,6 +334,19 @@ namespace {
         return number;
     }
 
+    void display_commands_help()
+    {
+        lprintf(
+            "Avaible commands:\n"
+            "  ? - display this text\n"
+            "  Q - quit program\n"
+            "  S - display elevator and elevator's buttons status\n"
+            "  U<number> - press 'Call Up' button on floor <number>\n"
+            "  D<number> - press 'Call Down' button on floor <number>\n"
+            "  <number> - press button <number> inside elevator\n"
+        );
+    }
+
     bool process_command(const char* cmd)
     {
         while (isspace(*cmd)) {
@@ -349,6 +362,9 @@ namespace {
             return false;
         case 'S':
             display_elevator_state();
+            return true;
+        case '?':
+            display_commands_help();
             return true;
         case 'U':
             number = get_floor_number(cmd + 1);
