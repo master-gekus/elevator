@@ -34,21 +34,6 @@ namespace {
     int floor_timeout;
     int door_timeout;
 
-    // Event queue
-    enum EventType {
-        Quit,
-        Timer,
-        PostTimer
-    };
-    struct Event {
-        EventType event_;
-        int param1_;
-        int param2_;
-    };
-    std::deque<Event> equeue;
-    std::mutex eqmutex;
-    std::condition_variable eqcond;
-
     void
 #ifdef __GNUC__
     __attribute__ ((format (printf, 1, 2)))
@@ -79,6 +64,17 @@ namespace {
     }
 #define elog(fmt,...) lprintf("%s: " fmt "\n", time_for_log().c_str(), ##__VA_ARGS__)
 
+    // Event queue
+    enum EventType {
+        Quit,
+    };
+    struct Event {
+        EventType event_;
+        int param_;
+    };
+    std::deque<Event> equeue;
+    std::mutex eqmutex;
+    std::condition_variable eqcond;
 
     void elevator_thread_proc()
     {
@@ -89,7 +85,7 @@ namespace {
     }
         using namespace std::chrono;
         system_clock::time_point next_time = system_clock::time_point::max();
-        Event next_event;
+        Event next_event{Quit};
         while (true) {
             Event ev;
             std::unique_lock<std::mutex> lock(eqmutex);
@@ -110,12 +106,6 @@ namespace {
 
             if (Quit == ev.event_) {
                 break;
-            }
-            if (Timer == ev.event_) {
-                elog("Timer received!");
-                delayed_event(1000, Event{PostTimer});
-            } else if (PostTimer == ev.event_) {
-                elog("PostTimer %s!", "received");
             }
         }
 #undef delayed_event
@@ -141,9 +131,6 @@ namespace {
         case 'Q':
             lprintf("Stopping elevator...\n");
             return false;
-        case 'T':
-            send_event(Event{Timer});
-            return true;
         default:
             break;
         }
