@@ -33,6 +33,13 @@ namespace {
     int floor_count;
     int floor_timeout;
     int door_timeout;
+    struct one_floor_buttons
+    {
+        unsigned int up : 1;
+        unsigned int down : 1;
+        unsigned int internal : 1;
+    };
+    one_floor_buttons buttons_state[MAX_FLOORS_COUNT];
 
     void
 #ifdef __GNUC__
@@ -67,6 +74,9 @@ namespace {
     // Event queue
     enum EventType {
         Quit,
+        UpCall,
+        DownCall,
+        InternalButton
     };
     struct Event {
         EventType event_;
@@ -107,6 +117,22 @@ namespace {
             if (Quit == ev.event_) {
                 break;
             }
+            switch (ev.event_) {
+            case UpCall:
+                elog("Upward call from floor %u accepted.", ev.param_);
+                buttons_state[ev.param_ - 1].up = 1;
+                break;
+            case DownCall:
+                elog("Downward call from floor %u accepted.", ev.param_);
+                buttons_state[ev.param_ - 1].down = 1;
+                break;
+            case InternalButton:
+                elog("Internal button for floor %u accepted.", ev.param_);
+                buttons_state[ev.param_ - 1].internal = 1;
+                break;
+            default:
+                break;
+            }
         }
 #undef delayed_event
     }
@@ -119,6 +145,41 @@ namespace {
         eqcond.notify_one();
     }
 
+    void display_elevator_state()
+    {
+        auto state = buttons_state;
+        char st_header[MAX_FLOORS_COUNT * 3 + 1];
+        char st_up[MAX_FLOORS_COUNT * 3 + 1];
+        char st_down[MAX_FLOORS_COUNT * 3 + 1];
+        char st_int[MAX_FLOORS_COUNT * 3 + 1];
+        for (int i = 0; i < floor_count; i++) {
+            sprintf(&(st_header[i * 3]), "%2u ", i + 1);
+            memcpy(&(st_up[i * 3]), state[i].up ? " ^ " : "   ", 3);
+            memcpy(&(st_down[i * 3]), state[i].down ? " v " : "   ", 3);
+            memcpy(&(st_int[i * 3]), state[i].internal ? " * " : "   ", 3);
+        }
+        st_up[floor_count * 3] = '\0';
+        st_down[floor_count * 3] = '\0';
+        st_int[floor_count * 3] = '\0';
+        lprintf(
+            "                  %s\n"
+            "Calls upward:     %s\n"
+            "Calls downward:   %s\n"
+            "Interanl buttons: %s\n",
+            st_header, st_up, st_down, st_int
+        );
+    }
+
+    int get_floor_number(const char *str)
+    {
+        int number = static_cast<int>(strtol(str, nullptr, 0));
+        if ((1 > number) || (floor_count < number)) {
+            lprintf("Invalid floor number: %s\n", str);
+            return 0;
+        }
+        return number;
+    }
+
     bool process_command(const char* cmd)
     {
         while (isspace(*cmd)) {
@@ -127,13 +188,38 @@ namespace {
         if ('\0' == (*cmd)) {
             return true;
         }
+        int number = 0;
         switch (toupper(*cmd)) {
         case 'Q':
             lprintf("Stopping elevator...\n");
             return false;
+        case 'S':
+            display_elevator_state();
+            return true;
+        case 'U':
+            number = get_floor_number(cmd + 1);
+            if (0 != number) {
+                send_event(Event{UpCall, number});
+            }
+            return true;
+        case 'D':
+            number = get_floor_number(cmd + 1);
+            if (0 != number) {
+                send_event(Event{DownCall, number});
+            }
+            return true;
         default:
             break;
         }
+
+        if (isdigit(*cmd)) {
+            number = get_floor_number(cmd);
+            if (0 != number) {
+                send_event(Event{InternalButton, number});
+            }
+            return true;
+        }
+
         lprintf("Unrecognized command \"%c\". Type \"?\" for list of avaible commands.\n", *cmd);
         return true;
     }
@@ -216,6 +302,7 @@ namespace {
 int main(int argc, char *argv[])
 {
     setlocale(LC_ALL, "C");
+    memset(&buttons_state, 0, sizeof(buttons_state));
 
     if (!parse_command_line(argc, argv)) {
         display_command_line_help(argv[0]);
