@@ -11,6 +11,8 @@
 #include <csignal>
 #include <string>
 #include <iostream>
+#include <sstream>
+#include <iomanip>
 #include <mutex>
 #include <condition_variable>
 #include <thread>
@@ -62,6 +64,22 @@ namespace {
         va_end(list);
     }
 
+    std::string time_for_log()
+    {
+        using namespace std::chrono;
+        auto now = system_clock::now();
+        auto time = system_clock::to_time_t(now);
+        auto ms = duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) -
+                  duration_cast<std::chrono::seconds>(now.time_since_epoch());
+
+        std::stringstream stream;
+        stream << std::put_time(std::localtime(&time), "%Y/%m/%d %H:%M:%S.");
+        stream << std::setfill('0') << std::setw(3) << ms.count();
+        return stream.str();
+    }
+#define elog(fmt,...) lprintf("%s: " fmt "\n", time_for_log().c_str(), ##__VA_ARGS__)
+
+
     void elevator_thread_proc()
     {
 #define delayed_event(to,e) \
@@ -94,10 +112,10 @@ namespace {
                 break;
             }
             if (Timer == ev.event_) {
-                lprintf("%s: Timer received!\n", __func__);
+                elog("Timer received!");
                 delayed_event(1000, Event{PostTimer});
             } else if (PostTimer == ev.event_) {
-                lprintf("%s: PostTimer received!\n", __func__);
+                elog("PostTimer %s!", "received");
             }
         }
 #undef delayed_event
